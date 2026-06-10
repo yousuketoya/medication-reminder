@@ -34,6 +34,20 @@
             }
         }
 
+        @keyframes pulse-overdue {
+
+            0%,
+            100% {
+                background-color: #fce4ec;
+                border-left-color: #880e4f;
+            }
+
+            50% {
+                background-color: #f48fb1;
+                border-left-color: #c2185b;
+            }
+        }
+
         @keyframes slide-center {
             0% {
                 top: -100px;
@@ -86,7 +100,6 @@
             margin-bottom: 8px;
         }
 
-        /* サマリーバー */
         #summary-bar {
             display: flex;
             gap: 8px;
@@ -127,7 +140,6 @@
             display: block;
         }
 
-        /* バックアップバー */
         #backup-bar {
             background: #e8f5e9;
             border: 1px solid #a5d6a7;
@@ -245,7 +257,6 @@
             cursor: pointer;
         }
 
-        /* 利用者カード */
         .user-card {
             border: 1px solid #ddd;
             padding: 13px 12px;
@@ -274,8 +285,8 @@
         }
 
         .status-overdue {
-            background: #fce4ec;
             border-left: 6px solid #880e4f;
+            animation: pulse-overdue 1s infinite;
         }
 
         .status-done {
@@ -284,7 +295,6 @@
             border-left: 6px solid #bbb;
         }
 
-        /* 休み専用スタイル */
         .status-absent {
             background: #e8eaf6;
             color: #9fa8da;
@@ -523,7 +533,6 @@
             text-align: left;
         }
 
-        /* 休み登録モーダルは青系 */
         .staff-modal-content.absent-mode h3 {
             color: #3949ab;
         }
@@ -698,7 +707,7 @@
         <h2>💊 お薬わすれん坊</h2>
         <div id="clock">読み込み中...</div>
 
-        <!-- サマリーバー（休み列追加） -->
+        <!-- サマリーバー -->
         <div id="summary-bar">
             <div class="summary-card total">
                 <span class="num" id="sum-total">0</span>本日対象
@@ -736,8 +745,25 @@
             <button id="start-btn" class="blink-btn" onclick="enableAudio()" style="flex:2;">📢 音声を有効化</button>
         </div>
 
+        <!-- アラーム設定 -->
         <div class="alarm-box">
             🔔 アラーム継続: <input type="number" id="alarm-duration" value="3" min="1" max="10" style="width:48px;"> 分
+            <div style="display:flex; gap:6px; align-items:center; margin-top:8px;">
+                <label style="font-size:13px; white-space:nowrap;">💤 スヌーズ：</label>
+                <select id="snooze-duration"
+                    style="flex:1; padding:5px; border:1px solid #ccc; border-radius:5px; font-size:13px;">
+                    <option value="1">1分後</option>
+                    <option value="2">2分後</option>
+                    <option value="3" selected>3分後</option>
+                    <option value="5">5分後</option>
+                    <option value="10">10分後</option>
+                </select>
+                <button onclick="snoozeAlarm()" style="background:#ff8f00; white-space:nowrap; padding:8px 12px;">💤
+                    スヌーズ</button>
+            </div>
+            <div id="snooze-status"
+                style="display:none; margin-top:6px; background:#fff3e0; border:1px solid #ffcc80; border-radius:6px; padding:6px 10px; font-size:13px; color:#e65100; text-align:center;">
+            </div>
             <button id="stop-alarm-btn" onclick="stopAlarm()"
                 style="display:none; background:#d32f2f; margin-top:6px; width:100%;">🚨 アラーム停止</button>
         </div>
@@ -848,7 +874,6 @@
                 <select id="log-staff-filter" onchange="renderLog()">
                     <option value="all">すべての職員</option>
                 </select>
-                <!-- 種別フィルター追加 -->
                 <select id="log-type-filter" onchange="renderLog()">
                     <option value="all">すべての種別</option>
                     <option value="done">服薬完了のみ</option>
@@ -878,11 +903,15 @@
         let autoResetTime = localStorage.getItem(RESET_TIME_KEY) || "05:00";
         let isAudioEnabled = false;
         let alarmTimer = null;
-        let alarmStopped = false; // 手動停止フラグ
-        let lastAlarmMinute = null; // 最後にアラームを起動した分
+        let alarmStopped = false;
+        let lastAlarmMinute = null;
         let pendingMedUserId = null;
-        let pendingActionType = 'confirm'; // 'confirm' or 'absent'
+        let pendingActionType = 'confirm';
         let currentSelectedDay = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
+
+        // スヌーズ用
+        let snoozeTimer = null;
+        let snoozeCountdownTimer = null;
 
         document.getElementById("reset-time-input").value = autoResetTime;
 
@@ -974,7 +1003,6 @@
                 if (sortMode === 'time') {
                     return a.time.localeCompare(b.time);
                 } else if (sortMode === 'status') {
-                    // 未 > 警告系 > 休み > 完了 の順
                     const order = s => s === '未' ? 0 : s === '休み' ? 1 : 2;
                     if (order(a.status) !== order(b.status)) return order(a.status) - order(b.status);
                     return a.time.localeCompare(b.time);
@@ -1006,12 +1034,10 @@
                 card.dataset.id = user.id;
 
                 if (isDone || isAbsent) {
-                    // 完了・休みは同じレイアウト（取消ボタン付き）
                     const nameStyle = isAbsent ? 'color:#7986cb;' : 'color:#aaa;';
                     const infoStyle = isAbsent ? 'color:#9fa8da;' : 'color:#bbb;';
                     const doneLabel = isAbsent ? '🏠 休み' : '✓ 完了';
                     const doneStyle = isAbsent ? 'background:#7986cb;' : 'background:#bbb;';
-
                     card.innerHTML = `
                     <div style="display:flex;align-items:center;">
                         <input type="checkbox" class="delete-check" value="${user.id}" style="margin-right:10px;transform:scale(1.4);">
@@ -1043,7 +1069,7 @@
                 listContainer.appendChild(card);
             });
 
-            // サマリー更新（休みをカウント・未服薬から除外）
+            // サマリー更新
             const todayUsers = users.filter(u => u.weekdays.includes(today));
             const doneCount = todayUsers.filter(u => u.status === '完了').length;
             const absentCount = todayUsers.filter(u => u.status === '休み').length;
@@ -1054,7 +1080,7 @@
             document.getElementById("sum-pending").textContent = pendCount;
             document.getElementById("sum-absent").textContent = absentCount;
 
-            const active = todayUsers.length - absentCount; // 休みを除いた実出席数
+            const active = todayUsers.length - absentCount;
             const rate = active > 0 ? Math.round(doneCount / active * 100) : 100;
             document.getElementById("info-bar").innerHTML = pendCount > 0
                 ? `⚠️ 未服薬：${pendCount}名`
@@ -1069,7 +1095,6 @@
             openStaffModal(u, 'confirm');
         }
 
-        // ===== 休み登録（職員モーダル） =====
         function markAbsent(id) {
             pendingMedUserId = id;
             pendingActionType = 'absent';
@@ -1077,7 +1102,6 @@
             openStaffModal(u, 'absent');
         }
 
-        // ===== 取消（完了・休み両対応） =====
         function undoStatus(id) {
             const u = users.find(u => u.id === id);
             const label = u.status === '休み' ? '休み登録' : '服薬完了';
@@ -1092,13 +1116,10 @@
             const isAbsent = mode === 'absent';
             const inner = document.getElementById("staff-modal-inner");
             const title = document.getElementById("staff-modal-title");
-
             inner.className = isAbsent ? 'staff-modal-content absent-mode' : 'staff-modal-content';
             title.textContent = isAbsent ? '🏠 休みを登録する職員を選んでください' : '👤 確認した職員を選んでください';
-
             document.getElementById("staff-modal-target").innerHTML =
                 `<strong>${u.name}</strong> さん<br>⏰ ${u.time}　💊 ${u.medicine}`;
-
             const list = document.getElementById("staff-btn-list");
             list.innerHTML = "";
             if (staffList.length === 0) {
@@ -1122,19 +1143,14 @@
         function confirmMedication(staffName) {
             const u = users.find(u => u.id === pendingMedUserId);
             if (!u) return closeStaffModal();
-
             u.status = '完了';
             localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
-
             _addLog({ userName: u.name, time: u.time, medicine: u.medicine, staff: staffName, type: 'done' });
-
             if (isAudioEnabled && window.speechSynthesis) {
                 try { window.speechSynthesis.speak(new SpeechSynthesisUtterance(u.name + "さん、服薬しました")); } catch (e) { }
             }
-
             const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
             const stillPending = users.some(x => x.time === u.time && x.status === '未' && x.weekdays.includes(today));
-
             closeStaffModal();
             renderList();
             if (!stillPending) {
@@ -1147,12 +1163,9 @@
         function confirmAbsent(staffName) {
             const u = users.find(u => u.id === pendingMedUserId);
             if (!u) return closeStaffModal();
-
             u.status = '休み';
             localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
-
             _addLog({ userName: u.name, time: u.time, medicine: u.medicine, staff: staffName, type: 'absent' });
-
             closeStaffModal();
             renderList();
             showToast(`🏠 ${u.name} さん 本日休みとして登録しました`);
@@ -1174,7 +1187,6 @@
             if (nowTime === autoResetTime) autoResetStatus();
             if (!isAudioEnabled) return;
 
-            // 分が変わったら手動停止フラグをリセット（次の時刻のアラームを受け付ける）
             if (nowTime !== lastAlarmMinute) {
                 alarmStopped = false;
             }
@@ -1182,7 +1194,6 @@
             const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
             const isTarget = users.some(u => u.time === nowTime && u.status === '未' && u.weekdays.includes(today));
 
-            // 鳴らす条件：対象者あり・手動停止されていない・まだ鳴っていない
             if (isTarget && !alarmStopped && !alarmTimer) {
                 lastAlarmMinute = nowTime;
                 const duration = parseInt(document.getElementById("alarm-duration").value) * 60000;
@@ -1190,7 +1201,6 @@
                 alarmAudio.loop = true;
                 alarmAudio.play().catch(() => { });
                 document.getElementById("stop-alarm-btn").style.display = "block";
-                // 設定時間後に自動停止（手動停止フラグは立てない→時間切れは再鳴動しない別管理）
                 alarmTimer = setTimeout(() => {
                     alarmAudio.pause();
                     document.getElementById("stop-alarm-btn").style.display = "none";
@@ -1200,13 +1210,75 @@
         }
 
         function stopAlarm() {
-            // 手動停止：フラグを立てて同分内の再鳴動を完全ブロック
+            // 完全停止：スヌーズも含めてすべてキャンセル
             alarmStopped = true;
             alarmAudio.pause();
             alarmAudio.currentTime = 0;
             document.getElementById("stop-alarm-btn").style.display = "none";
+            document.getElementById("snooze-status").style.display = "none";
             clearTimeout(alarmTimer);
+            clearTimeout(snoozeTimer);
+            clearInterval(snoozeCountdownTimer);
             alarmTimer = null;
+            snoozeTimer = null;
+        }
+
+        function snoozeAlarm() {
+            // アラーム音を即座に止める
+            alarmAudio.pause();
+            alarmAudio.currentTime = 0;
+            clearTimeout(alarmTimer);
+            clearTimeout(snoozeTimer);
+            clearInterval(snoozeCountdownTimer);
+            alarmTimer = null;
+            snoozeTimer = null;
+            // alarmStopped は false のまま（スヌーズ後に再鳴動させるため）
+            document.getElementById("stop-alarm-btn").style.display = "none";
+
+            const minutes = parseInt(document.getElementById("snooze-duration").value);
+            let remaining = minutes * 60;
+
+            const statusEl = document.getElementById("snooze-status");
+            statusEl.style.display = "block";
+
+            // カウントダウン表示（1秒ごと）
+            snoozeCountdownTimer = setInterval(() => {
+                remaining--;
+                if (remaining <= 0) {
+                    clearInterval(snoozeCountdownTimer);
+                    statusEl.textContent = "⏰ スヌーズ終了 — アラームを再開します";
+                } else {
+                    const m = Math.floor(remaining / 60);
+                    const s = remaining % 60;
+                    statusEl.textContent = `💤 スヌーズ中... あと ${m}分${String(s).padStart(2, '0')}秒`;
+                }
+            }, 1000);
+
+            // スヌーズ終了後に再鳴動
+            snoozeTimer = setTimeout(() => {
+                clearInterval(snoozeCountdownTimer);
+                statusEl.style.display = "none";
+
+                const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
+                const stillPending = users.some(u => u.status === '未' && u.weekdays.includes(today));
+
+                if (stillPending && !alarmStopped) {
+                    alarmAudio = new Audio(document.getElementById("alarm-sound-select").value);
+                    alarmAudio.loop = true;
+                    alarmAudio.play().catch(() => { });
+                    document.getElementById("stop-alarm-btn").style.display = "block";
+                    const duration = parseInt(document.getElementById("alarm-duration").value) * 60000;
+                    alarmTimer = setTimeout(() => {
+                        alarmAudio.pause();
+                        document.getElementById("stop-alarm-btn").style.display = "none";
+                        alarmTimer = null;
+                    }, duration);
+                    showToast("💤 スヌーズ終了 — アラームを再開しました");
+                }
+                snoozeTimer = null;
+            }, minutes * 60000);
+
+            showToast(`💤 ${minutes}分後に再アラームします`);
         }
 
         // ===== 自動リセット =====
@@ -1265,9 +1337,9 @@
                 ? '<p style="color:#888;font-size:12px;margin:4px 0;">職員未登録</p>'
                 : staffList.map((s, i) =>
                     `<span style="display:inline-flex;align-items:center;background:#fff;border:1px solid #ccc;border-radius:20px;padding:3px 10px;margin:3px;font-size:13px;">
-                    ${s}
-                    <button onclick="removeStaff(${i})" style="background:none;color:#d32f2f;border:none;padding:0 0 0 5px;font-size:13px;cursor:pointer;min-width:auto;">✕</button>
-                </span>`
+                        ${s}
+                        <button onclick="removeStaff(${i})" style="background:none;color:#d32f2f;border:none;padding:0 0 0 5px;font-size:13px;cursor:pointer;min-width:auto;">✕</button>
+                    </span>`
                 ).join('');
 
             const sel = document.getElementById("log-staff-filter");
@@ -1298,7 +1370,6 @@
         function renderLog() {
             const el = document.getElementById("log-list");
             if (!el) return;
-
             const dateFilter = document.getElementById("log-date-filter").value;
             const staffFilter = document.getElementById("log-staff-filter").value;
             const typeFilter = document.getElementById("log-type-filter").value;
@@ -1325,9 +1396,9 @@
                 const label = isAbsent ? '休み登録' : '服薬確認';
                 const cls = isAbsent ? 'log-entry log-absent' : 'log-entry';
                 return `<div class="${cls}">
-                📅 ${log.datetime}　👤 <strong>${log.userName}</strong><br>
-                ⏰ ${log.time}　💊 ${log.medicine}　${icon} ${label}：${log.staff}
-            </div>`;
+                    📅 ${log.datetime}　👤 <strong>${log.userName}</strong><br>
+                    ⏰ ${log.time}　💊 ${log.medicine}　${icon} ${label}：${log.staff}
+                </div>`;
             }).join('');
         }
 
