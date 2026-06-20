@@ -4,7 +4,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <title>お薬わすれん坊</title>
     <style>
         * {
@@ -710,18 +709,10 @@
 
         <!-- サマリーバー -->
         <div id="summary-bar">
-            <div class="summary-card total">
-                <span class="num" id="sum-total">0</span>本日対象
-            </div>
-            <div class="summary-card done">
-                <span class="num" id="sum-done">0</span>服薬完了
-            </div>
-            <div class="summary-card pending">
-                <span class="num" id="sum-pending">0</span>未服薬
-            </div>
-            <div class="summary-card absent">
-                <span class="num" id="sum-absent">0</span>休み
-            </div>
+            <div class="summary-card total"><span class="num" id="sum-total">0</span>本日対象</div>
+            <div class="summary-card done"><span class="num" id="sum-done">0</span>服薬完了</div>
+            <div class="summary-card pending"><span class="num" id="sum-pending">0</span>未服薬</div>
+            <div class="summary-card absent"><span class="num" id="sum-absent">0</span>休み</div>
         </div>
 
         <!-- バックアップバー -->
@@ -801,6 +792,7 @@
         <div id="user-list"></div>
 
         <div class="btn-group" style="margin-top:10px;">
+            <button onclick="bulkConfirm()" style="background:#2e7d32; flex:1;">✅ 選択服薬完了</button>
             <button onclick="deleteSelected()" style="background:#d32f2f; flex:1;">🗑 選択削除</button>
             <button onclick="resetStatus()" style="background:#555; flex:1;">🔄 服薬リセット</button>
         </div>
@@ -857,11 +849,33 @@
             <!-- 職員マスタ -->
             <div class="staff-form-box">
                 <strong>👥 職員マスタ登録</strong>
-                <div style="display:flex; gap:8px;">
+
+                <!-- 1人ずつ追加 -->
+                <div style="display:flex; gap:8px; margin-bottom:10px;">
                     <input type="text" id="new-staff-name" placeholder="職員名を入力"
                         style="flex:1; padding:8px; border:1px solid #ccc; border-radius:5px; font-size:14px;">
                     <button onclick="addStaff()" style="padding:8px 12px;">追加</button>
                 </div>
+
+                <!-- まとめて入力 -->
+                <textarea id="bulk-staff-input" placeholder="まとめて入力してください...
+例1: 田中 一郎, 鈴木 花子
+例2: 
+田中 一郎
+鈴木 花子" style="width:100%; height:120px; padding:8px; border:1px solid #ccc; border-radius:5px; font-size:13px; font-family:sans-serif; margin-bottom:6px; resize:vertical;"></textarea>
+                <button onclick="bulkAddStaff()" style="width:100%; background:#2e7d32; margin-bottom:10px;">👥
+                    まとめて追加</button>
+
+                <!-- CSVインポート -->
+                <div style="display:flex; gap:8px; margin-bottom:10px;">
+                    <button onclick="exportStaffCSV()"
+                        style="flex:1; font-size:12px; padding:8px; background:#008080;">📤 CSV書き出し</button>
+                    <button onclick="triggerStaffCSVImport()"
+                        style="flex:1; font-size:12px; padding:8px; background:#1a237e;">📥 CSV読み込み</button>
+                </div>
+                <input type="file" id="staff-csv-input" style="display:none" accept=".csv"
+                    onchange="handleStaffCSV(event)">
+
                 <div id="staff-list" style="margin-top:10px;"></div>
             </div>
         </div>
@@ -895,12 +909,15 @@
     <div id="toast"></div>
 
     <script>
+        // 定数
         const STORAGE_KEY = "daycare_users_v2";
         const RESET_TIME_KEY = "auto_reset_time_key";
         const BACKUP_DATE_KEY = "last_backup_date";
         const STAFF_KEY = "daycare_staff_v1";
         const LOG_KEY = "daycare_med_log_v1";
+        const LAST_RESET_DATE_KEY = "last_reset_date";
 
+        // 変数
         let users = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
         let staffList = JSON.parse(localStorage.getItem(STAFF_KEY)) || [];
         let medLogs = JSON.parse(localStorage.getItem(LOG_KEY)) || [];
@@ -910,23 +927,13 @@
         let alarmStopped = false;
         let lastAlarmMinute = null;
         let pendingMedUserId = null;
+        let pendingMedUserIds = null;
         let pendingActionType = 'confirm';
         let currentSelectedDay = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
-
-        // スヌーズ用
         let snoozeTimer = null;
         let snoozeCountdownTimer = null;
 
         document.getElementById("reset-time-input").value = autoResetTime;
-
-        if (users.length === 0) {
-            users = [
-                { id: "1", name: "佐藤 一郎", time: "09:00", medicine: "朝食後のお薬", weekdays: ["日", "月", "火", "水", "木", "金", "土"], status: "未" },
-                { id: "2", name: "鈴木 花子", time: "10:30", medicine: "血圧のお薬", weekdays: ["月", "水", "金"], status: "未" },
-                { id: "3", name: "山田 太郎", time: "13:30", medicine: "血圧のお薬", weekdays: ["月", "火", "水", "木", "金"], status: "未" },
-            ];
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
-        }
 
         // ===== アラーム音 =====
         let alarmAudio = new Audio(document.getElementById("alarm-sound-select").value);
@@ -1004,15 +1011,13 @@
             );
 
             filtered = [...filtered].sort((a, b) => {
-                if (sortMode === 'time') {
-                    return a.time.localeCompare(b.time);
-                } else if (sortMode === 'status') {
+                if (sortMode === 'time') return a.time.localeCompare(b.time);
+                if (sortMode === 'status') {
                     const order = s => s === '未' ? 0 : s === '休み' ? 1 : 2;
                     if (order(a.status) !== order(b.status)) return order(a.status) - order(b.status);
                     return a.time.localeCompare(b.time);
-                } else {
-                    return a.name.localeCompare(b.name, 'ja');
                 }
+                return a.name.localeCompare(b.name, 'ja');
             });
 
             const listContainer = document.getElementById("user-list");
@@ -1032,7 +1037,6 @@
 
                 const badge = getUrgencyBadge(user.time, user.status);
                 const dayDisplay = `（${user.weekdays.join('')}）`;
-
                 const card = document.createElement("div");
                 card.className = `user-card ${cardClass}`;
                 card.dataset.id = user.id;
@@ -1043,42 +1047,42 @@
                     const doneLabel = isAbsent ? '🏠 休み' : '✓ 完了';
                     const doneStyle = isAbsent ? 'background:#7986cb;' : 'background:#bbb;';
                     card.innerHTML = `
-                    <div style="display:flex;align-items:center;">
-                        <input type="checkbox" class="delete-check" value="${user.id}" style="margin-right:10px;transform:scale(1.4);">
-                        <div>
-                            <span class="user-name" style="${nameStyle}">${user.name}</span>${badge} <small style="${infoStyle}">${dayDisplay}</small><br>
-                            <span style="${infoStyle}">⏰ ${user.time} | 💊 ${user.medicine}</span>
+                        <div style="display:flex;align-items:center;">
+                            <input type="checkbox" class="delete-check" value="${user.id}" style="margin-right:10px;transform:scale(1.4);">
+                            <div>
+                                <span class="user-name" style="${nameStyle}">${user.name}</span>${badge}
+                                <small style="${infoStyle}">${dayDisplay}</small><br>
+                                <span style="${infoStyle}">⏰ ${user.time} | 💊 ${user.medicine}</span>
+                            </div>
                         </div>
-                    </div>
-                    <div style="display:flex;gap:5px;">
-                        <button onclick="editUser('${user.id}', this)" class="btn-action">編集</button>
-                        <button onclick="undoStatus('${user.id}')" class="btn-undo">↩ 取消</button>
-                        <button class="btn-confirm" style="${doneStyle}">${doneLabel}</button>
-                    </div>`;
+                        <div style="display:flex;gap:5px;">
+                            <button onclick="editUser('${user.id}',this)" class="btn-action">編集</button>
+                            <button onclick="undoStatus('${user.id}')" class="btn-undo">↩ 取消</button>
+                            <button class="btn-confirm" style="${doneStyle}">${doneLabel}</button>
+                        </div>`;
                 } else {
                     card.innerHTML = `
-                    <div style="display:flex;align-items:center;">
-                        <input type="checkbox" class="delete-check" value="${user.id}" style="margin-right:10px;transform:scale(1.4);">
-                        <div>
-                            <span class="user-name">${user.name}</span>${badge} <small>${dayDisplay}</small><br>
-                            ⏰ ${user.time} | 💊 ${user.medicine}
+                        <div style="display:flex;align-items:center;">
+                            <input type="checkbox" class="delete-check" value="${user.id}" style="margin-right:10px;transform:scale(1.4);">
+                            <div>
+                                <span class="user-name">${user.name}</span>${badge}
+                                <small>${dayDisplay}</small><br>
+                                ⏰ ${user.time} | 💊 ${user.medicine}
+                            </div>
                         </div>
-                    </div>
-                    <div style="display:flex;gap:5px;">
-                        <button onclick="editUser('${user.id}', this)" class="btn-action">編集</button>
-                        <button onclick="markAbsent('${user.id}')" class="btn-absent">🏠 休み</button>
-                        <button onclick="toggleMedication('${user.id}')" class="btn-confirm">確認</button>
-                    </div>`;
+                        <div style="display:flex;gap:5px;">
+                            <button onclick="editUser('${user.id}',this)" class="btn-action">編集</button>
+                            <button onclick="markAbsent('${user.id}')" class="btn-absent">🏠 休み</button>
+                            <button onclick="toggleMedication('${user.id}')" class="btn-confirm">確認</button>
+                        </div>`;
                 }
                 listContainer.appendChild(card);
             });
 
-            // サマリー更新
             const todayUsers = users.filter(u => u.weekdays.includes(today));
             const doneCount = todayUsers.filter(u => u.status === '完了').length;
             const absentCount = todayUsers.filter(u => u.status === '休み').length;
             const pendCount = todayUsers.length - doneCount - absentCount;
-
             document.getElementById("sum-total").textContent = todayUsers.length;
             document.getElementById("sum-done").textContent = doneCount;
             document.getElementById("sum-pending").textContent = pendCount;
@@ -1091,19 +1095,65 @@
                 : `✅ 全員完了（服薬率 ${rate}%）`;
         }
 
+        // ===== 一括服薬確認 =====
+        function bulkConfirm() {
+            const checked = Array.from(document.querySelectorAll('.delete-check:checked')).map(cb => cb.value);
+            if (checked.length === 0) return alert("確認する利用者を選択してください");
+            const targets = users.filter(u => checked.includes(u.id) && u.status !== '完了');
+            if (targets.length === 0) return alert("選択された方は全員すでに服薬完了済みです");
+
+            pendingMedUserIds = targets.map(u => u.id);
+            pendingActionType = 'bulk-confirm';
+
+            const inner = document.getElementById("staff-modal-inner");
+            inner.className = 'staff-modal-content';
+            document.getElementById("staff-modal-title").textContent = '👤 確認した職員を選んでください';
+            document.getElementById("staff-modal-target").innerHTML =
+                `<strong>${targets.length}名</strong> をまとめて服薬完了にします<br>` +
+                targets.map(u => `・${u.name}（${u.time}）`).join('<br>');
+
+            const list = document.getElementById("staff-btn-list");
+            list.innerHTML = "";
+            if (staffList.length === 0) {
+                list.innerHTML = '<p style="color:#d32f2f;font-size:13px;">職員が登録されていません。<br>データ管理エリアから登録してください。</p>';
+            } else {
+                staffList.forEach(staff => {
+                    const btn = document.createElement("button");
+                    btn.textContent = staff;
+                    btn.onclick = () => confirmBulkMedication(staff);
+                    list.appendChild(btn);
+                });
+            }
+            document.getElementById("staff-modal").classList.add("show");
+        }
+
+        function confirmBulkMedication(staffName) {
+            const targets = users.filter(u => pendingMedUserIds.includes(u.id));
+            targets.forEach(u => {
+                u.status = '完了';
+                _addLog({ userName: u.name, time: u.time, medicine: u.medicine, staff: staffName, type: 'done' });
+            });
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
+            if (isAudioEnabled && window.speechSynthesis) {
+                try { window.speechSynthesis.speak(new SpeechSynthesisUtterance(`${targets.length}名、服薬完了しました`)); } catch (e) { }
+            }
+            pendingMedUserIds = null;
+            closeStaffModal();
+            renderList();
+            showToast(`✅ ${targets.length}名 服薬確認しました`);
+        }
+
         // ===== 服薬確認（職員モーダル） =====
         function toggleMedication(id) {
             pendingMedUserId = id;
             pendingActionType = 'confirm';
-            const u = users.find(u => u.id === id);
-            openStaffModal(u, 'confirm');
+            openStaffModal(users.find(u => u.id === id), 'confirm');
         }
 
         function markAbsent(id) {
             pendingMedUserId = id;
             pendingActionType = 'absent';
-            const u = users.find(u => u.id === id);
-            openStaffModal(u, 'absent');
+            openStaffModal(users.find(u => u.id === id), 'absent');
         }
 
         function undoStatus(id) {
@@ -1119,9 +1169,9 @@
         function openStaffModal(u, mode) {
             const isAbsent = mode === 'absent';
             const inner = document.getElementById("staff-modal-inner");
-            const title = document.getElementById("staff-modal-title");
             inner.className = isAbsent ? 'staff-modal-content absent-mode' : 'staff-modal-content';
-            title.textContent = isAbsent ? '🏠 休みを登録する職員を選んでください' : '👤 確認した職員を選んでください';
+            document.getElementById("staff-modal-title").textContent =
+                isAbsent ? '🏠 休みを登録する職員を選んでください' : '👤 確認した職員を選んでください';
             document.getElementById("staff-modal-target").innerHTML =
                 `<strong>${u.name}</strong> さん<br>⏰ ${u.time}　💊 ${u.medicine}`;
             const list = document.getElementById("staff-btn-list");
@@ -1141,6 +1191,7 @@
 
         function closeStaffModal() {
             pendingMedUserId = null;
+            pendingMedUserIds = null;
             document.getElementById("staff-modal").classList.remove("show");
         }
 
@@ -1157,11 +1208,7 @@
             const stillPending = users.some(x => x.time === u.time && x.status === '未' && x.weekdays.includes(today));
             closeStaffModal();
             renderList();
-            if (!stillPending) {
-                showToast(`🎉 ${u.time} の対象者、全員確認完了！`);
-            } else {
-                showToast(`✅ ${u.name} さん 服薬確認しました`);
-            }
+            showToast(stillPending ? `✅ ${u.name} さん 服薬確認しました` : `🎉 ${u.time} の対象者、全員確認完了！`);
         }
 
         function confirmAbsent(staffName) {
@@ -1188,16 +1235,11 @@
 
         // ===== アラーム =====
         function checkAlarm(nowTime) {
-            if (nowTime === autoResetTime) autoResetStatus();
+            if (nowTime === autoResetTime && localStorage.getItem(LAST_RESET_DATE_KEY) !== new Date().toISOString().slice(0, 10)) autoResetStatus();
             if (!isAudioEnabled) return;
-
-            if (nowTime !== lastAlarmMinute) {
-                alarmStopped = false;
-            }
-
+            if (nowTime !== lastAlarmMinute) alarmStopped = false;
             const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
             const isTarget = users.some(u => u.time === nowTime && u.status === '未' && u.weekdays.includes(today));
-
             if (isTarget && !alarmStopped && !alarmTimer) {
                 lastAlarmMinute = nowTime;
                 const duration = parseInt(document.getElementById("alarm-duration").value) * 60000;
@@ -1214,70 +1256,47 @@
         }
 
         function stopAlarm() {
-            // 完全停止：スヌーズも含めてすべてキャンセル
             alarmStopped = true;
-            alarmAudio.pause();
-            alarmAudio.currentTime = 0;
+            alarmAudio.pause(); alarmAudio.currentTime = 0;
             document.getElementById("stop-alarm-btn").style.display = "none";
             document.getElementById("snooze-status").style.display = "none";
-            clearTimeout(alarmTimer);
-            clearTimeout(snoozeTimer);
-            clearInterval(snoozeCountdownTimer);
-            alarmTimer = null;
-            snoozeTimer = null;
+            clearTimeout(alarmTimer); clearTimeout(snoozeTimer); clearInterval(snoozeCountdownTimer);
+            alarmTimer = null; snoozeTimer = null;
         }
 
         function cancelSnooze() {
-            clearTimeout(snoozeTimer);
-            clearInterval(snoozeCountdownTimer);
-            snoozeTimer = null;
-            snoozeCountdownTimer = null;
-            // alarmStopped は触らない → 再度スヌーズ設定すればまた鳴る
+            clearTimeout(snoozeTimer); clearInterval(snoozeCountdownTimer);
+            snoozeTimer = null; snoozeCountdownTimer = null;
             document.getElementById("snooze-status").style.display = "none";
             document.getElementById("snooze-countdown").textContent = "";
             showToast("⏹ スヌーズを停止しました");
         }
 
         function snoozeAlarm() {
-            // アラーム音を即座に止める
-            alarmAudio.pause();
-            alarmAudio.currentTime = 0;
-            clearTimeout(alarmTimer);
-            clearTimeout(snoozeTimer);
-            clearInterval(snoozeCountdownTimer);
-            alarmTimer = null;
-            snoozeTimer = null;
-            // alarmStopped は false のまま（スヌーズ後に再鳴動させるため）
+            alarmAudio.pause(); alarmAudio.currentTime = 0;
+            clearTimeout(alarmTimer); clearTimeout(snoozeTimer); clearInterval(snoozeCountdownTimer);
+            alarmTimer = null; snoozeTimer = null;
             document.getElementById("stop-alarm-btn").style.display = "none";
-
             const minutes = parseInt(document.getElementById("snooze-duration").value);
             let remaining = minutes * 60;
-
             const statusEl = document.getElementById("snooze-status");
             const countdownEl = document.getElementById("snooze-countdown");
             statusEl.style.display = "block";
-
-            // カウントダウン表示（1秒ごと）
             snoozeCountdownTimer = setInterval(() => {
                 remaining--;
                 if (remaining <= 0) {
                     clearInterval(snoozeCountdownTimer);
                     countdownEl.textContent = "⏰ スヌーズ終了 — アラームを再開します";
                 } else {
-                    const m = Math.floor(remaining / 60);
-                    const s = remaining % 60;
+                    const m = Math.floor(remaining / 60), s = remaining % 60;
                     countdownEl.textContent = `💤 スヌーズ中... あと ${m}分${String(s).padStart(2, '0')}秒`;
                 }
             }, 1000);
-
-            // スヌーズ終了後に再鳴動
             snoozeTimer = setTimeout(() => {
                 clearInterval(snoozeCountdownTimer);
                 statusEl.style.display = "none";
-
                 const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
                 const stillPending = users.some(u => u.status === '未' && u.weekdays.includes(today));
-
                 if (stillPending && !alarmStopped) {
                     alarmAudio = new Audio(document.getElementById("alarm-sound-select").value);
                     alarmAudio.loop = true;
@@ -1293,16 +1312,15 @@
                 }
                 snoozeTimer = null;
             }, minutes * 60000);
-
             showToast(`💤 ${minutes}分後に再アラームします`);
         }
 
         // ===== 自動リセット =====
         function autoResetStatus() {
-            const today = new Date().toISOString().slice(0, 10);
-            downloadJSON(`kusuri_auto_${today}.json`);
+            const todayStr = new Date().toISOString().slice(0, 10);
             users.forEach(u => u.status = "未");
             localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
+            localStorage.setItem(LAST_RESET_DATE_KEY, todayStr);
             renderList();
         }
 
@@ -1318,9 +1336,7 @@
         function downloadJSON(filename) {
             const blob = new Blob([JSON.stringify(users, null, 2)], { type: "application/json" });
             const link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            link.download = filename;
-            link.click();
+            link.href = URL.createObjectURL(blob); link.download = filename; link.click();
             const now = new Date();
             const dt = now.toLocaleDateString('ja-JP') + ' ' + now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
             localStorage.setItem(BACKUP_DATE_KEY, dt);
@@ -1357,7 +1373,6 @@
                         <button onclick="removeStaff(${i})" style="background:none;color:#d32f2f;border:none;padding:0 0 0 5px;font-size:13px;cursor:pointer;min-width:auto;">✕</button>
                     </span>`
                 ).join('');
-
             const sel = document.getElementById("log-staff-filter");
             const cur = sel.value;
             sel.innerHTML = '<option value="all">すべての職員</option>' +
@@ -1373,6 +1388,65 @@
             document.getElementById("new-staff-name").value = "";
             renderStaffList();
             showToast(`${name} を登録しました`);
+        }
+
+        function bulkAddStaff() {
+            const raw = document.getElementById("bulk-staff-input").value;
+            if (!raw.trim()) return alert("職員名を入力してください");
+            const names = raw
+                .split(/[\n\r,，、。]/)
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+            if (names.length === 0) return alert("正しく入力されているか確認してください");
+            let added = 0, skipped = 0;
+            names.forEach(name => {
+                if (staffList.includes(name)) { skipped++; return; }
+                staffList.push(name);
+                added++;
+            });
+            localStorage.setItem(STAFF_KEY, JSON.stringify(staffList));
+            document.getElementById("bulk-staff-input").value = "";
+            renderStaffList();
+            let msg = `${added}名を追加しました`;
+            if (skipped > 0) msg += `（${skipped}名は重複のためスキップ）`;
+            showToast(msg);
+        }
+
+        function exportStaffCSV() {
+            if (staffList.length === 0) return alert("登録されている職員がいません");
+            let csv = "職員名\n" + staffList.join("\n");
+            const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: "text/csv;charset=utf-8;" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob); link.download = "staff_list.csv"; link.click();
+            showToast("📤 職員リストをCSVで書き出しました");
+        }
+
+        function triggerStaffCSVImport() {
+            document.getElementById("staff-csv-input").click();
+        }
+
+        function handleStaffCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = e => {
+                const rows = e.target.result.split('\n');
+                let added = 0, skipped = 0;
+                rows.forEach(row => {
+                    const name = row.replace(/\r/g, '').trim();
+                    if (!name || name === '職員名') return;
+                    if (staffList.includes(name)) { skipped++; return; }
+                    staffList.push(name);
+                    added++;
+                });
+                localStorage.setItem(STAFF_KEY, JSON.stringify(staffList));
+                renderStaffList();
+                event.target.value = "";
+                let msg = `${added}名をCSVから追加しました`;
+                if (skipped > 0) msg += `（${skipped}名は重複のためスキップ）`;
+                showToast(msg);
+            };
+            reader.readAsText(file, 'UTF-8');
         }
 
         function removeStaff(i) {
@@ -1391,7 +1465,6 @@
             const typeFilter = document.getElementById("log-type-filter").value;
             const today = new Date().toLocaleDateString('ja-JP');
             const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
-
             let filtered = medLogs.filter(log => {
                 if (staffFilter !== 'all' && log.staff !== staffFilter) return false;
                 if (typeFilter === 'done' && log.type !== 'done') return false;
@@ -1403,18 +1476,13 @@
                 }
                 return true;
             });
-
             if (filtered.length === 0) { el.innerHTML = "（該当する記録がありません）"; return; }
-
             el.innerHTML = filtered.slice(0, 100).map(log => {
                 const isAbsent = log.type === 'absent';
                 const icon = isAbsent ? '🏠' : '✅';
                 const label = isAbsent ? '休み登録' : '服薬確認';
                 const cls = isAbsent ? 'log-entry log-absent' : 'log-entry';
-                return `<div class="${cls}">
-                    📅 ${log.datetime}　👤 <strong>${log.userName}</strong><br>
-                    ⏰ ${log.time}　💊 ${log.medicine}　${icon} ${label}：${log.staff}
-                </div>`;
+                return `<div class="${cls}">📅 ${log.datetime}　👤 <strong>${log.userName}</strong><br>⏰ ${log.time}　💊 ${log.medicine}　${icon} ${label}：${log.staff}</div>`;
             }).join('');
         }
 
@@ -1560,7 +1628,14 @@
         }
 
         function initializeAll() {
-            if (confirm("全データを削除しますか？")) { localStorage.removeItem(STORAGE_KEY); location.reload(); }
+            if (confirm("全データを削除しますか？\n利用者・職員・ログがすべて削除されます。")) {
+                localStorage.removeItem(STORAGE_KEY);
+                localStorage.removeItem(STAFF_KEY);
+                localStorage.removeItem(LOG_KEY);
+                localStorage.removeItem(BACKUP_DATE_KEY);
+                localStorage.removeItem(LAST_RESET_DATE_KEY);
+                location.reload();
+            }
         }
 
         function showToast(msg) {
@@ -1575,6 +1650,24 @@
         );
 
         window.onload = () => {
+            // ===== 起動時リセット判定 =====
+            const now = new Date();
+            const todayStr = now.toISOString().slice(0, 10); // 例：2026-06-21
+            const lastResetDate = localStorage.getItem(LAST_RESET_DATE_KEY);
+
+            // 自動リセット時刻を「時」「分」に分解
+            const [resetHour, resetMin] = autoResetTime.split(':').map(Number);
+            const resetDateTime = new Date();
+            resetDateTime.setHours(resetHour, resetMin, 0, 0);
+
+            // 「今日まだリセットしていない」かつ「リセット時刻を過ぎている」場合にリセット
+            if (lastResetDate !== todayStr && now >= resetDateTime) {
+                users.forEach(u => u.status = "未");
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
+                localStorage.setItem(LAST_RESET_DATE_KEY, todayStr);
+                console.log("起動時リセット実行：" + todayStr);
+            }
+
             renderList();
             switchDay(currentSelectedDay);
             updateBackupBar();
