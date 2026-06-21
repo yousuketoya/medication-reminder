@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="favicon.png" type="image/png">
-    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
     <title>お薬わすれん坊</title>
     <style>
         * {
@@ -738,6 +738,11 @@
             <button onclick="testAlarmVolume()" style="background:#555; flex:1;">🔊 音量テスト</button>
             <button id="start-btn" class="blink-btn" onclick="enableAudio()" style="flex:2;">📢 音声を有効化</button>
         </div>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+            <label style="font-size:13px; color:#555;">🔊 服薬確認の名前読み上げ：</label>
+            <button id="speech-toggle" onclick="toggleSpeech()"
+                style="padding:5px 14px; font-size:13px; background:#008080;">ON</button>
+        </div>
 
         <!-- アラーム設定 -->
         <div class="alarm-box">
@@ -918,6 +923,7 @@
         const STAFF_KEY = "daycare_staff_v1";
         const LOG_KEY = "daycare_med_log_v1";
         const LAST_RESET_DATE_KEY = "last_reset_date";
+        const SPEECH_KEY = "speech_enabled";
 
         // 変数
         let users = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
@@ -1136,7 +1142,7 @@
                 _addLog({ userName: u.name, time: u.time, medicine: u.medicine, staff: staffName, type: 'done' });
             });
             localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
-            if (isAudioEnabled && window.speechSynthesis) {
+            if (isAudioEnabled && isSpeechEnabled() && window.speechSynthesis) {
                 try { window.speechSynthesis.speak(new SpeechSynthesisUtterance(`${targets.length}名、服薬完了しました`)); } catch (e) { }
             }
             pendingMedUserIds = null;
@@ -1203,7 +1209,7 @@
             u.status = '完了';
             localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
             _addLog({ userName: u.name, time: u.time, medicine: u.medicine, staff: staffName, type: 'done' });
-            if (isAudioEnabled && window.speechSynthesis) {
+            if (isAudioEnabled && isSpeechEnabled() && window.speechSynthesis) {
                 try { window.speechSynthesis.speak(new SpeechSynthesisUtterance(u.name + "さん、服薬しました")); } catch (e) { }
             }
             const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
@@ -1636,8 +1642,20 @@
                 localStorage.removeItem(LOG_KEY);
                 localStorage.removeItem(BACKUP_DATE_KEY);
                 localStorage.removeItem(LAST_RESET_DATE_KEY);
+                localStorage.removeItem(SPEECH_KEY);
                 location.reload();
             }
+        }
+
+        function toggleSpeech() {
+            const current = localStorage.getItem(SPEECH_KEY) !== "off";
+            const next = !current;
+            localStorage.setItem(SPEECH_KEY, next ? "on" : "off");
+            document.getElementById("speech-toggle").textContent = next ? "ON" : "OFF";
+            document.getElementById("speech-toggle").style.background = next ? "#008080" : "#aaa";
+        }
+        function isSpeechEnabled() {
+            return localStorage.getItem(SPEECH_KEY) !== "off";
         }
 
         function showToast(msg) {
@@ -1675,6 +1693,12 @@
             updateBackupBar();
             renderStaffList();
             renderLog();
+
+            // 読み上げボタンの初期状態
+            const btn = document.getElementById("speech-toggle");
+            if (localStorage.getItem(SPEECH_KEY) === "off") {
+                btn.textContent = "OFF"; btn.style.background = "#aaa";
+            }
         };
     </script>
 </body>
