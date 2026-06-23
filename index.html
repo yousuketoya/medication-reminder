@@ -766,6 +766,25 @@
                 <button onclick="cancelSnooze()"
                     style="margin-top:6px; background:#888; width:100%; font-size:12px; padding:6px;">⏹ スヌーズ停止</button>
             </div>
+
+            <!-- 時刻超過再アラーム設定 -->
+            <div style="display:flex; gap:6px; align-items:center; margin-top:8px;">
+                <label style="font-size:13px; white-space:nowrap;">🔁 時刻超過再アラーム：</label>
+                <select id="overdue-rearm-duration"
+                    style="flex:1; padding:5px; border:1px solid #ccc; border-radius:5px; font-size:13px;">
+                    <option value="0">しない</option>
+                    <option value="10" selected>10分後</option>
+                    <option value="15">15分後</option>
+                    <option value="20">20分後</option>
+                </select>
+            </div>
+            <div id="overdue-rearm-status"
+                style="display:none; margin-top:6px; background:#fce4ec; border:1px solid #f48fb1; border-radius:6px; padding:6px 10px; font-size:13px; color:#880e4f; text-align:center;">
+                <span id="overdue-rearm-countdown"></span>
+                <button onclick="cancelOverdueRearm()"
+                    style="margin-top:6px; background:#888; width:100%; font-size:12px; padding:6px;">⏹ 再アラーム停止</button>
+            </div>
+
             <button id="stop-alarm-btn" onclick="stopAlarm()"
                 style="display:none; background:#d32f2f; margin-top:6px; width:100%;">🚨 アラーム停止</button>
         </div>
@@ -940,6 +959,10 @@
         let currentSelectedDay = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
         let snoozeTimer = null;
         let snoozeCountdownTimer = null;
+
+        // 時刻超過再アラーム用
+        let overdueRearmTimer = null;
+        let overdueRearmCountdownTimer = null;
 
         document.getElementById("reset-time-input").value = autoResetTime;
 
@@ -1270,6 +1293,76 @@
             document.getElementById("snooze-status").style.display = "none";
             clearTimeout(alarmTimer); clearTimeout(snoozeTimer); clearInterval(snoozeCountdownTimer);
             alarmTimer = null; snoozeTimer = null;
+
+            // 時刻超過の未確認者がいれば再アラームをセット
+            const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
+            const hasOverdue = users.some(u =>
+                u.status === '未' && u.weekdays.includes(today) && getUrgency(u.time) === 'overdue'
+            );
+            const minutes = parseInt(document.getElementById("overdue-rearm-duration").value);
+            if (hasOverdue && minutes > 0) {
+                scheduleOverdueRearm(minutes);
+                showToast(`🔁 ${minutes}分後に再アラームします（時刻超過の未確認者あり）`);
+            }
+        }
+
+        function scheduleOverdueRearm(minutes) {
+            clearTimeout(overdueRearmTimer); clearInterval(overdueRearmCountdownTimer);
+            let remaining = minutes * 60;
+            const statusEl = document.getElementById("overdue-rearm-status");
+            const countdownEl = document.getElementById("overdue-rearm-countdown");
+            statusEl.style.display = "block";
+
+            overdueRearmCountdownTimer = setInterval(() => {
+                remaining--;
+                if (remaining <= 0) {
+                    clearInterval(overdueRearmCountdownTimer);
+                    countdownEl.textContent = "🔔 再アラームを開始します...";
+                } else {
+                    const m = Math.floor(remaining / 60), s = remaining % 60;
+                    countdownEl.textContent = `🔁 再アラームまで ${m}分${String(s).padStart(2, '0')}秒`;
+                }
+            }, 1000);
+
+            overdueRearmTimer = setTimeout(() => {
+                clearInterval(overdueRearmCountdownTimer);
+                statusEl.style.display = "none";
+                const today = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
+                const stillOverdue = users.some(u =>
+                    u.status === '未' && u.weekdays.includes(today) && getUrgency(u.time) === 'overdue'
+                );
+                if (stillOverdue) {
+                    alarmStopped = false;
+                    alarmAudio = new Audio(document.getElementById("alarm-sound-select").value);
+                    alarmAudio.loop = true;
+                    alarmAudio.play().catch(() => { });
+                    document.getElementById("stop-alarm-btn").style.display = "block";
+                    const duration = parseInt(document.getElementById("alarm-duration").value) * 60000;
+                    alarmTimer = setTimeout(() => {
+                        alarmAudio.pause();
+                        document.getElementById("stop-alarm-btn").style.display = "none";
+                        alarmTimer = null;
+                        // アラームが自動終了した場合も再び再アラームをスケジュール
+                        const m2 = parseInt(document.getElementById("overdue-rearm-duration").value);
+                        const today2 = ["日", "月", "火", "水", "木", "金", "土"][new Date().getDay()];
+                        const stillOverdue2 = users.some(u =>
+                            u.status === '未' && u.weekdays.includes(today2) && getUrgency(u.time) === 'overdue'
+                        );
+                        if (stillOverdue2 && m2 > 0) {
+                            scheduleOverdueRearm(m2);
+                        }
+                    }, duration);
+                    showToast("🔔 再アラーム：時刻超過の未確認者がいます！");
+                }
+                overdueRearmTimer = null;
+            }, minutes * 60000);
+        }
+
+        function cancelOverdueRearm() {
+            clearTimeout(overdueRearmTimer); clearInterval(overdueRearmCountdownTimer);
+            overdueRearmTimer = null; overdueRearmCountdownTimer = null;
+            document.getElementById("overdue-rearm-status").style.display = "none";
+            showToast("⏹ 再アラームを停止しました");
         }
 
         function cancelSnooze() {
@@ -1637,6 +1730,7 @@
 
         function initializeAll() {
             if (confirm("全データを削除しますか？\n利用者・職員・ログがすべて削除されます。")) {
+                clearTimeout(overdueRearmTimer); clearInterval(overdueRearmCountdownTimer);
                 localStorage.removeItem(STORAGE_KEY);
                 localStorage.removeItem(STAFF_KEY);
                 localStorage.removeItem(LOG_KEY);
@@ -1670,17 +1764,12 @@
         );
 
         window.onload = () => {
-            // ===== 起動時リセット判定 =====
             const now = new Date();
-            const todayStr = now.toISOString().slice(0, 10); // 例：2026-06-21
+            const todayStr = now.toISOString().slice(0, 10);
             const lastResetDate = localStorage.getItem(LAST_RESET_DATE_KEY);
-
-            // 自動リセット時刻を「時」「分」に分解
             const [resetHour, resetMin] = autoResetTime.split(':').map(Number);
             const resetDateTime = new Date();
             resetDateTime.setHours(resetHour, resetMin, 0, 0);
-
-            // 「今日まだリセットしていない」かつ「リセット時刻を過ぎている」場合にリセット
             if (lastResetDate !== todayStr && now >= resetDateTime) {
                 users.forEach(u => u.status = "未");
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
@@ -1694,7 +1783,6 @@
             renderStaffList();
             renderLog();
 
-            // 読み上げボタンの初期状態
             const btn = document.getElementById("speech-toggle");
             if (localStorage.getItem(SPEECH_KEY) === "off") {
                 btn.textContent = "OFF"; btn.style.background = "#aaa";
